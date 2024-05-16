@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     fs,
     path::{Path, PathBuf},
 };
@@ -6,11 +7,25 @@ use std::{
 use chardet::detect;
 use encoding_rs::GB18030;
 use serde::Serialize;
+use thiserror::Error;
 
 pub const UTF8: &str = "UTF-8";
 pub const ASCII: &str = "ASCII";
 const BOM: &[u8] = &[239, 187, 191];
 const PROBABILITY_AT_LEAST: f32 = 0.7;
+
+#[derive(Error, Debug)]
+pub struct ConvertError {
+    file: String,
+    #[source]
+    source: anyhow::Error,
+}
+
+impl Display for ConvertError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {:?}", self.file, self.source)
+    }
+}
 
 #[derive(Debug, PartialEq, Serialize, Default)]
 pub enum EncodingType {
@@ -48,17 +63,16 @@ impl Coder {
         }
         EncodingType::Other
     }
-    pub fn convert_to_utf8bom(&self) -> anyhow::Result<()> {
-        match self.encoding() {
+    pub fn convert_to_utf8bom(&self) -> anyhow::Result<(), ConvertError> {
+        let bytes = match self.encoding() {
             EncodingType::UTF8 => {
                 let mut bytes = self.bytes.clone();
                 BOM.iter().rev().for_each(|c| {
                     bytes.insert(0, c.clone());
                 });
-                fs::write(&self.filepath, bytes)?;
-                Ok(())
+                bytes
             }
-            EncodingType::UTF8BOM => Ok(()),
+            EncodingType::UTF8BOM => self.bytes.clone(),
             EncodingType::Other => {
                 // if other encoding, then try to read as GB18030 and save as UTF-8 with BOM
                 let (contents, _, _) = GB18030.decode(&self.bytes);
@@ -66,10 +80,16 @@ impl Coder {
                 BOM.iter().rev().for_each(|c| {
                     bytes.insert(0, c.clone());
                 });
-                fs::write(&self.filepath, bytes)?;
-                Ok(())
+                bytes
             }
-        }
+        };
+        if let Err(err) = fs::write(&self.filepath, bytes) {
+            return Err(ConvertError {
+                source: err.into(),
+                file: self.filepath.to_string_lossy().to_string(),
+            });
+        };
+        Ok(())
     }
 }
 
@@ -85,10 +105,11 @@ mod code_test {
     }
     #[test]
     fn convert_to_utf8bom_test() {
-        let filepath =
-            Path::new(r"D:\projects\rusty\mobius_kit\.mocks\code\generated\sdtm\dev\ae.sas");
+        let filepath = Path::new(
+            r"D:\Studies\ak112\303\stats\CSR\validation\dummy\program\macros\aecount5-v3-1.sas",
+        );
         let coder = Coder::new(filepath).unwrap();
-        assert_eq!(coder.encoding(), EncodingType::Other);
+        assert_eq!(coder.encoding(), EncodingType::UTF8);
         coder.convert_to_utf8bom().unwrap();
         let coder = Coder::new(filepath).unwrap();
         assert_eq!(coder.encoding(), EncodingType::UTF8BOM);
